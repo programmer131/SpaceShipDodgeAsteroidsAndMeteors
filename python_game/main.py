@@ -132,6 +132,11 @@ udp_state = {
 def udp_listener_thread():
     """Background thread listening for incoming UDP telemetry packets."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except Exception:
+        pass
     try:
         sock.bind((UDP_IP, UDP_PORT))
         sock.settimeout(0.5)

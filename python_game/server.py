@@ -113,6 +113,11 @@ def websocket_server_thread():
 def udp_listener_thread():
     """Listens for UDP packets on UDP_PORT and broadcasts them to all WebSocket clients."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except Exception:
+        pass
     try:
         sock.bind(("127.0.0.1", UDP_PORT))
         sock.settimeout(0.5)
