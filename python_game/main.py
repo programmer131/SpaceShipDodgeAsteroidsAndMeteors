@@ -33,6 +33,7 @@ class SoundEffects:
             self.explosion = self._make_explosion()
             self.hit = self._make_hit()
             self.damage = self._make_damage()
+            self.bomb = self._make_bomb()
             print("[Audio] Sound engine active!")
         except Exception as e:
             print(f"[Audio Warning] Sound disabled: {e}")
