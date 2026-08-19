@@ -17,12 +17,15 @@ public class Player : MonoBehaviour
     private void Update()
     {
         _offset = Vector2.zero;
+
+        if (GameManager == null || GameManager.currentState != GameState.Playing)
+            return;
         
-        if (Input.GetKey(KeyCode.LeftArrow))
+        if (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A))
         {
             _offset = Time.deltaTime * Speed * Vector2.left;
         }
-        else if (Input.GetKey(KeyCode.RightArrow))
+        else if (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D))
         {
             _offset = Time.deltaTime * -Speed * Vector2.left;
         }
@@ -30,12 +33,23 @@ public class Player : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (GameManager == null || GameManager.currentState != GameState.Playing)
+            return;
+
         if ((_rigidbody2D.position + _offset).x > -9f && (_rigidbody2D.position + _offset).x < 9f)
             _rigidbody2D.position += _offset;
     }
 
     private void OnCollisionEnter2D(Collision2D col)
     {
-        GameManager.Hit();
+        if (col.gameObject != null)
+        {
+            Destroy(col.gameObject);
+        }
+
+        if (GameManager != null)
+        {
+            GameManager.Hit();
+        }
     }
 }

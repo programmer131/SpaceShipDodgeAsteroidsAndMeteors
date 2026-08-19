@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpaceShip Dodge: Web & Pose Edition</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <!-- HUD Overlay -->
+        <div class="hud-bar">
+            <div class="health-container">
+                <span class="health-label">HP</span>
+                <div class="health-bg">
+                    <div id="health-fill"></div>
+                </div>
+            </div>
+            <div id="mode-badge" class="mode-badge">CONTROL: KEYBOARD / MOUSE</div>
+            <div id="score-display" class="score-display">SCORE: 00000</div>
+        </div>
+
+        <!-- HTML5 Canvas -->
+        <canvas id="gameCanvas" width="1000" height="750"></canvas>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen">
+            <h1>GAME OVER</h1>
+            <div id="final-score">FINAL SCORE: 0</div>
+            <button id="restart-btn" class="btn-restart">RESTART GAME (Press R)</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
