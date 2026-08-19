@@ -100,13 +100,16 @@ def websocket_server_thread():
     sock.listen(10)
     print(f"[WebSocket Bridge] Server listening on ws://0.0.0.0:{WS_PORT}...")
 
-    while True:
-        try:
-            client_socket, client_address = sock.accept()
-            t = threading.Thread(target=handle_ws_client, args=(client_socket, client_address), daemon=True)
-            t.start()
-        except Exception as e:
-            time.sleep(0.5)
+    try:
+        while True:
+            try:
+                client_socket, client_address = sock.accept()
+                t = threading.Thread(target=handle_ws_client, args=(client_socket, client_address), daemon=True)
+                t.start()
+            except Exception:
+                time.sleep(0.5)
+    finally:
+        sock.close()
 
 # --- UDP Listener & WebSocket Broadcast Thread ---
 
@@ -126,30 +129,33 @@ def udp_listener_thread():
         print(f"[UDP Error] Could not bind to UDP port {UDP_PORT}: {e}")
         return
 
-    while True:
-        try:
-            data, _ = sock.recvfrom(1024)
-            payload = json.loads(data.decode('utf-8'))
-            pose_state.update(payload)
-            pose_state["active"] = True
+    try:
+        while True:
+            try:
+                data, _ = sock.recvfrom(1024)
+                payload = json.loads(data.decode('utf-8'))
+                pose_state.update(payload)
+                pose_state["active"] = True
 
-            # Broadcast frame to all connected WebSocket browsers
-            msg = json.dumps(pose_state)
-            frame = build_ws_frame(msg)
+                # Broadcast frame to all connected WebSocket browsers
+                msg = json.dumps(pose_state)
+                frame = build_ws_frame(msg)
 
-            with ws_clients_lock:
-                dead_clients = set()
-                for client in list(ws_clients):
-                    try:
-                        client.sendall(frame)
-                    except Exception:
-                        dead_clients.add(client)
-                ws_clients.difference_update(dead_clients)
+                with ws_clients_lock:
+                    dead_clients = set()
+                    for client in list(ws_clients):
+                        try:
+                            client.sendall(frame)
+                        except Exception:
+                            dead_clients.add(client)
+                    ws_clients.difference_update(dead_clients)
 
-        except socket.timeout:
-            pass
-        except Exception as e:
-            pass
+            except socket.timeout:
+                pass
+            except Exception:
+                pass
+    finally:
+        sock.close()
 
 # --- Static HTTP File Server ---
 

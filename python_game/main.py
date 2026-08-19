@@ -145,21 +145,24 @@ def udp_listener_thread():
         print(f"[UDP Listener Error] Could not bind to {UDP_IP}:{UDP_PORT} -> {e}")
         return
 
-    while True:
-        try:
-            data, _ = sock.recvfrom(1024)
-            payload = json.loads(data.decode('utf-8'))
-            udp_state["norm_x"] = payload.get("x", udp_state["norm_x"])
-            udp_state["norm_y"] = payload.get("y", udp_state["norm_y"])
-            udp_state["shoot"] = payload.get("shoot", False)
-            udp_state["bomb"] = payload.get("bomb", False)
-            udp_state["last_packet_time"] = time.time()
-            udp_state["active"] = True
-        except socket.timeout:
-            if time.time() - udp_state["last_packet_time"] > 2.0:
-                udp_state["active"] = False
-        except Exception as e:
-            pass
+    try:
+        while True:
+            try:
+                data, _ = sock.recvfrom(1024)
+                payload = json.loads(data.decode('utf-8'))
+                udp_state["norm_x"] = payload.get("x", udp_state["norm_x"])
+                udp_state["norm_y"] = payload.get("y", udp_state["norm_y"])
+                udp_state["shoot"] = payload.get("shoot", False)
+                udp_state["bomb"] = payload.get("bomb", False)
+                udp_state["last_packet_time"] = time.time()
+                udp_state["active"] = True
+            except socket.timeout:
+                if time.time() - udp_state["last_packet_time"] > 2.0:
+                    udp_state["active"] = False
+            except Exception:
+                pass
+    finally:
+        sock.close()
 
 # --- Game Entities ---
 
