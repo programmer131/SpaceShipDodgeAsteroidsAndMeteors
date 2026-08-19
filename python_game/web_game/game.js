@@ -120,12 +120,32 @@ class WebAudioSynth {
         osc.start(now);
         osc.stop(now + 0.25);
     }
+
+    playBomb() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(160, now);
+        osc.frequency.exponentialRampToValueAtTime(30, now + 0.5);
+
+        gain.gain.setValueAtTime(0.5, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc.start(now);
+        osc.stop(now + 0.5);
+    }
 }
 
 const audio = new WebAudioSynth();
 
 // --- WebSocket Pose Receiver ---
-let poseState = { x: 0.5, y: 0.8, shoot: false, active: false };
+let poseState = { x: 0.5, y: 0.8, shoot: false, bomb: false, active: false };
 
 function initWebSocket() {
     const host = window.location.hostname || 'localhost';
@@ -144,6 +164,7 @@ function initWebSocket() {
             poseState.x = data.x ?? poseState.x;
             poseState.y = data.y ?? poseState.y;
             poseState.shoot = data.shoot ?? false;
+            poseState.bomb = data.bomb ?? false;
             poseState.active = true;
             modeBadge.innerText = "CONTROL: YOLO POSE 🥊";
             modeBadge.style.color = "#00ff80";
@@ -239,6 +260,42 @@ class Laser {
         ctx.moveTo(this.x, this.y);
         ctx.lineTo(this.x, this.y + 16);
         ctx.stroke();
+    }
+}
+
+class Shockwave {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 10;
+        this.maxRadius = 900;
+        this.speed = 35;
+    }
+
+    update() {
+        this.radius += this.speed;
+    }
+
+    draw() {
+        if (this.radius < this.maxRadius) {
+            const alpha = Math.max(0, 1.0 - this.radius / this.maxRadius);
+            const width = Math.max(2, Math.floor(16 * alpha));
+
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.strokeStyle = '#ff00b4';
+            ctx.lineWidth = width;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.strokeStyle = '#00f0ff';
+            ctx.lineWidth = Math.max(1, width / 2);
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius * 0.85, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
     }
 }
 
@@ -385,11 +442,13 @@ const stars = Array.from({ length: 90 }, () => new Star());
 const particles = [];
 const lasers = [];
 const obstacles = [];
+const shockwaves = [];
 
 let player = new Player();
 let score = 0;
 let gameOver = false;
 let spawnTimer = 0;
+let bombCooldown = 0;
 
 // Inputs
 const keys = {};
@@ -422,12 +481,31 @@ function shootLasers() {
     audio.playLaser();
 }
 
+function triggerBomb() {
+    if (bombCooldown === 0 && !gameOver) {
+        bombCooldown = 90;
+        shockwaves.push(new Shockwave(player.x, player.y));
+        audio.playBomb();
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obs = obstacles[i];
+            score += Math.floor(obs.radius * 3) + 30;
+            for (let p = 0; p < 20; p++) {
+                particles.push(new Particle(obs.x, obs.y, '#ff00b4'));
+            }
+            obstacles.splice(i, 1);
+        }
+    }
+}
+
 function resetGame() {
     player = new Player();
     obstacles.length = 0;
     lasers.length = 0;
     particles.length = 0;
+    shockwaves.length = 0;
     score = 0;
+    bombCooldown = 0;
     gameOver = false;
     gameOverScreen.classList.remove('active');
 }
@@ -463,6 +541,13 @@ function gameLoop() {
         if ((keys['Space'] || (poseState.active && poseState.shoot)) && player.shootCooldown === 0) {
             shootLasers();
         }
+
+        // Super Bomb Trigger (Key 'B' / Shift OR Pose Jump+Punch / Both Hands Up)
+        if ((keys['KeyB'] || keys['ShiftLeft'] || keys['ShiftRight'] || (poseState.active && poseState.bomb))) {
+            triggerBomb();
+        }
+
+        if (bombCooldown > 0) bombCooldown--;
 
         // Update player
         player.update(poseState.x, poseState.y, poseState.active);
@@ -532,11 +617,17 @@ function gameLoop() {
         player.draw();
     }
 
-    // Update Particles
+    // Update Particles & Shockwaves
     for (let i = particles.length - 1; i >= 0; i--) {
         particles[i].update();
         particles[i].draw();
         if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+        shockwaves[i].update();
+        shockwaves[i].draw();
+        if (shockwaves[i].radius >= shockwaves[i].maxRadius) shockwaves.splice(i, 1);
     }
 
     // Update UI HUD

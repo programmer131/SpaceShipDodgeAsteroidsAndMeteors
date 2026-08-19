@@ -116,12 +116,10 @@ def main():
                     # Normalize Y position
                     norm_y = max(0.1, min(0.9, (shoulder_center_y / float(h)) * 1.2))
 
-                    # --- SUPERHERO PUNCH & CLAP GESTURE DETECTION ---
-                    # 1. Arm Extension Ratio (Wrist distance from shoulder relative to shoulder width)
+                    # --- SUPERHERO PUNCH, CLAP & JUMP BOMB GESTURE DETECTION ---
+                    # 1. Arm Extension Ratio
                     l_arm_ext = math.hypot(l_wrist[0] - l_shoulder[0], l_wrist[1] - l_shoulder[1]) / shoulder_dist
                     r_arm_ext = math.hypot(r_wrist[0] - r_shoulder[0], r_wrist[1] - r_shoulder[1]) / shoulder_dist
-
-                    # 2. Hand Clap / Touch Distance
                     wrist_dist = math.hypot(r_wrist[0] - l_wrist[0], r_wrist[1] - l_wrist[1]) / shoulder_dist
 
                     left_punch = (l_wrist[2] > 0.35 and l_arm_ext > 1.15)
@@ -130,6 +128,16 @@ def main():
 
                     shoot_active = left_punch or right_punch or hands_clapped
 
+                    # 2. Both Hands Up OR Jump + Punch for SUPER BOMB
+                    both_hands_up = (l_wrist[2] > 0.35 and r_wrist[2] > 0.35 and 
+                                     l_wrist[1] < l_shoulder[1] - 15 and r_wrist[1] < r_shoulder[1] - 15)
+                    
+                    # Jump detection (shoulders elevated up high in frame)
+                    is_jumping = (shoulder_center_y < h * 0.42)
+                    jump_punch_bomb = is_jumping and (left_punch or right_punch or hands_clapped)
+
+                    bomb_active = both_hands_up or jump_punch_bomb
+
                     # --- Visual Skeleton & Punch HUD Overlay ---
                     cv2.line(frame, (int(l_shoulder[0]), int(l_shoulder[1])), 
                              (int(r_shoulder[0]), int(r_shoulder[1])), (0, 255, 255), 3)
@@ -137,21 +145,22 @@ def main():
 
                     # Draw Left Arm & Punch Glow
                     if l_wrist[2] > 0.35:
-                        l_color = (0, 0, 255) if left_punch else (0, 240, 255)
+                        l_color = (255, 0, 255) if bomb_active else ((0, 0, 255) if left_punch else (0, 240, 255))
                         cv2.line(frame, (int(l_shoulder[0]), int(l_shoulder[1])), (int(l_wrist[0]), int(l_wrist[1])), l_color, 4)
-                        cv2.circle(frame, (int(l_wrist[0]), int(l_wrist[1])), 14 if left_punch else 8, l_color, -1)
+                        cv2.circle(frame, (int(l_wrist[0]), int(l_wrist[1])), 16 if bomb_active else 10, l_color, -1)
 
                     # Draw Right Arm & Punch Glow
                     if r_wrist[2] > 0.35:
-                        r_color = (0, 0, 255) if right_punch else (0, 240, 255)
+                        r_color = (255, 0, 255) if bomb_active else ((0, 0, 255) if right_punch else (0, 240, 255))
                         cv2.line(frame, (int(r_shoulder[0]), int(r_shoulder[1])), (int(r_wrist[0]), int(r_wrist[1])), r_color, 4)
-                        cv2.circle(frame, (int(r_wrist[0]), int(r_wrist[1])), 14 if right_punch else 8, r_color, -1)
+                        cv2.circle(frame, (int(r_wrist[0]), int(r_wrist[1])), 16 if bomb_active else 10, r_color, -1)
 
         # Transmit UDP JSON packet to Pygame game
         payload = {
             "x": float(norm_x),
             "y": float(norm_y),
             "shoot": bool(shoot_active),
+            "bomb": bool(bomb_active),
             "time": time.time()
         }
         sock.sendto(json.dumps(payload).encode('utf-8'), (UDP_IP, UDP_PORT))
@@ -162,8 +171,13 @@ def main():
         cv2.line(frame, (10, h - 30), (w - 10, h - 30), (100, 100, 100), 2)
         cv2.circle(frame, (gauge_x, h - 30), 8, (255, 255, 0), -1)
 
-        status_text = f"CAM: {cam_source.split('/')[-1]} | PUNCH FIRING: {'YES 🥊' if shoot_active else 'NO'}"
-        color = (0, 0, 255) if shoot_active else (0, 255, 255)
+        if bomb_active:
+            status_text = "💥 SUPER BOMB BLAST UNLEASHED! 💥"
+            color = (255, 0, 255)
+        else:
+            status_text = f"CAM: {cam_source.split('/')[-1]} | PUNCH: {'YES 🥊' if shoot_active else 'NO'}"
+            color = (0, 0, 255) if shoot_active else (0, 255, 255)
+
         cv2.putText(frame, status_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
         cv2.imshow("YOLO Pose Tracker (Superhero Punch Control)", frame)

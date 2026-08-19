@@ -68,6 +68,15 @@ class SoundEffects:
         audio = (wave * 18000).astype(np.int16)
         return pygame.sndarray.make_sound(np.column_stack((audio, audio)))
 
+    def _make_bomb(self):
+        sr = 44100
+        t = np.linspace(0, 0.6, int(sr * 0.6), False)
+        noise = np.random.uniform(-1, 1, len(t))
+        sub = np.sin(2 * np.pi * 40 * t) + np.sin(2 * np.pi * 65 * t)
+        wave = (noise * 0.5 + sub * 0.5) * np.exp(-t * 4)
+        audio = (wave * 20000).astype(np.int16)
+        return pygame.sndarray.make_sound(np.column_stack((audio, audio)))
+
     def play_laser(self):
         if self.enabled: self.laser.play()
 
@@ -79,6 +88,26 @@ class SoundEffects:
 
     def play_damage(self):
         if self.enabled: self.damage.play()
+
+    def play_bomb(self):
+        if self.enabled: self.bomb.play()
+
+class Shockwave:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.radius = 10
+        self.max_radius = 900
+        self.speed = 35
+
+    def update(self):
+        self.radius += self.speed
+
+    def draw(self, surface):
+        if self.radius < self.max_radius:
+            width = max(2, int(16 * (1.0 - self.radius / self.max_radius)))
+            pygame.draw.circle(surface, (255, 0, 255), (int(self.x), int(self.y)), int(self.radius), width=width)
+            pygame.draw.circle(surface, (0, 240, 255), (int(self.x), int(self.y)), int(self.radius * 0.85), width=max(1, width//2))
 
 # Colors (Vibrant Futuristic Palette)
 COLOR_BG = (10, 12, 24)
@@ -95,6 +124,7 @@ udp_state = {
     "norm_x": 0.5,       # Normalized position 0.0 (left) to 1.0 (right)
     "norm_y": 0.8,       # Normalized position 0.0 (top) to 1.0 (bottom)
     "shoot": False,
+    "bomb": False,
     "last_packet_time": 0.0,
     "active": False
 }
@@ -117,6 +147,7 @@ def udp_listener_thread():
             udp_state["norm_x"] = payload.get("x", udp_state["norm_x"])
             udp_state["norm_y"] = payload.get("y", udp_state["norm_y"])
             udp_state["shoot"] = payload.get("shoot", False)
+            udp_state["bomb"] = payload.get("bomb", False)
             udp_state["last_packet_time"] = time.time()
             udp_state["active"] = True
         except socket.timeout:
@@ -362,12 +393,14 @@ def main():
     particles = []
     lasers = []
     asteroids = []
+    shockwaves = []
 
     player = Player()
 
     score = 0
     game_over = False
     spawn_timer = 0
+    bomb_cooldown = 0
 
     print("[Game Started] Use Arrow Keys or launch 'python pose_tracker.py' for body control!")
 
@@ -415,6 +448,23 @@ def main():
             lasers.append(Laser(player.x + 12, player.y - 15))
             player.shoot_cooldown = 12
             sound_fx.play_laser()
+
+        # Super Bomb Trigger (Keyboard 'B' / Shift OR UDP Jump+Punch / Both Hands)
+        should_bomb = keys[pygame.K_b] or keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] or (is_udp and udp_state["bomb"])
+        if should_bomb and bomb_cooldown == 0 and not game_over:
+            bomb_cooldown = 90  # 1.5 sec cooldown
+            shockwaves.append(Shockwave(player.x, player.y))
+            sound_fx.play_bomb()
+
+            # Destroy all active obstacles on screen with bonus points
+            for asteroid in asteroids[:]:
+                score += int(asteroid.radius * 3) + 30
+                for _ in range(20):
+                    particles.append(Particle(asteroid.x, asteroid.y, COLOR_MAGENTA))
+                asteroids.remove(asteroid)
+
+        if bomb_cooldown > 0:
+            bomb_cooldown -= 1
 
         # --- Logic Updates ---
         for star in stars:
@@ -488,11 +538,16 @@ def main():
                     if asteroid in asteroids:
                         asteroids.remove(asteroid)
 
-        # Update Particles
+        # Update Particles & Shockwaves
         for particle in particles[:]:
             particle.update()
             if particle.life <= 0:
                 particles.remove(particle)
+
+        for sw in shockwaves[:]:
+            sw.update()
+            if sw.radius >= sw.max_radius:
+                shockwaves.remove(sw)
 
         # --- Rendering ---
         screen.fill(COLOR_BG)
@@ -500,6 +555,10 @@ def main():
         # Stars background
         for star in stars:
             star.draw(screen)
+
+        # Shockwaves blast ring
+        for sw in shockwaves:
+            sw.draw(screen)
 
         # Particles
         for particle in particles:
