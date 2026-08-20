@@ -11,6 +11,8 @@ import socket
 import json
 import threading
 import time
+import shutil
+import subprocess
 import pygame
 import numpy as np
 
@@ -93,6 +95,57 @@ class SoundEffects:
     def play_bomb(self):
         if self.enabled: self.bomb.play()
 
+class ScoreAnnouncer:
+    """
+    Speaks score milestones (10,000, 20,000, ...) via whatever TTS is available.
+    Tries pyttsx3, then the espeak-ng command (Linux), then `say` (macOS).
+    All speaking is fire-and-forget so it never blocks the game loop.
+    """
+    def __init__(self):
+        self.last_milestone = 0
+        self.backend = self._detect_backend()
+        if self.backend:
+            print(f"[TTS] Score announcer ready (backend: {self.backend})")
+        else:
+            print("[TTS] No TTS backend found - score announcements disabled")
+
+    def _detect_backend(self):
+        try:
+            import pyttsx3
+            self._pyttsx3 = pyttsx3.init()
+            return "pyttsx3"
+        except Exception:
+            pass
+        if shutil.which("espeak-ng"):
+            return "espeak-ng"
+        if sys.platform == "darwin" and shutil.which("say"):
+            return "say"
+        return None
+
+    def check(self, score):
+        """Call each frame; announces when the score crosses a new 10,000 milestone."""
+        milestone = int(score) // 10000
+        if milestone > self.last_milestone and milestone >= 1:
+            self.last_milestone = milestone
+            self.speak(str(milestone * 10000))
+
+    def speak(self, text):
+        if self.backend == "pyttsx3":
+            threading.Thread(target=self._speak_pyttsx3, args=(text,), daemon=True).start()
+        elif self.backend == "espeak-ng":
+            subprocess.Popen(["espeak-ng", "-s", "165", "-a", "150", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.backend == "say":
+            subprocess.Popen(["say", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _speak_pyttsx3(self, text):
+        try:
+            self._pyttsx3.say(text)
+            self._pyttsx3.runAndWait()
+        except Exception:
+            pass
+
 class Shockwave:
     def __init__(self, x, y):
         self.x = x
@@ -125,6 +178,8 @@ udp_state = {
     "norm_x": 0.5,       # Normalized position 0.0 (left) to 1.0 (right)
     "norm_y": 0.8,       # Normalized position 0.0 (top) to 1.0 (bottom)
     "shoot": False,
+    "jump": False,
+    "restart": False,
     "bomb": False,
     "last_packet_time": 0.0,
     "active": False
@@ -154,6 +209,8 @@ def udp_listener_thread():
                 udp_state["norm_x"] = payload.get("x", udp_state["norm_x"])
                 udp_state["norm_y"] = payload.get("y", udp_state["norm_y"])
                 udp_state["shoot"] = payload.get("shoot", False)
+                udp_state["jump"] = payload.get("jump", False)
+                udp_state["restart"] = payload.get("restart", False)
                 udp_state["bomb"] = payload.get("bomb", False)
                 udp_state["last_packet_time"] = time.time()
                 udp_state["active"] = True
@@ -232,9 +289,12 @@ class Asteroid:
         self.radius = random.randint(22, 48)
         self.x = random.randint(self.radius, SCREEN_WIDTH - self.radius)
         self.y = -self.radius * 2
-        self.speed = random.uniform(2.0, 5.0) * (1.0 + (difficulty - 1.0) * 0.15)
+        # Slow and smooth falling speed for comfortable reaction time
+        base_speed = random.uniform(1.2, 2.4)
+        speed_mult = 1.0 + min(0.8, (difficulty - 1.0) * 0.08)
+        self.speed = base_speed * speed_mult
         self.rotation = random.uniform(0, 360)
-        self.rot_speed = random.uniform(-2.5, 2.5)
+        self.rot_speed = random.uniform(-2.0, 2.0)
         self.hp = max(1, int(self.radius / 16))
         
         # 4 Colorful Kid-Friendly Types
@@ -327,30 +387,29 @@ class Asteroid:
             pygame.draw.polygon(surface, dark_c, transformed)
             pygame.draw.polygon(surface, self.color, transformed, width=3)
 
+PLAYER_Y = int(SCREEN_HEIGHT * 0.88)
+
 class Player:
     def __init__(self):
         self.x = SCREEN_WIDTH // 2
-        self.y = SCREEN_HEIGHT * 0.82
+        self.y = PLAYER_Y
         self.target_x = self.x
-        self.target_y = self.y
         self.radius = 24
         self.health = 100
         self.max_health = 100
         self.shoot_cooldown = 0
 
     def update(self, norm_x, norm_y, is_udp):
-        # Target interpolation (Smooth Lerping)
+        # Target horizontal interpolation (Smooth Lerping)
         if is_udp:
             self.target_x = norm_x * SCREEN_WIDTH
-            self.target_y = norm_y * SCREEN_HEIGHT
         
-        # Clamp targets
+        # Clamp horizontal target
         self.target_x = max(self.radius, min(SCREEN_WIDTH - self.radius, self.target_x))
-        self.target_y = max(self.radius, min(SCREEN_HEIGHT - self.radius, self.target_y))
 
-        # Smooth movement
+        # Smooth horizontal movement (Y position locked at bottom)
         self.x += (self.target_x - self.x) * 0.18
-        self.y += (self.target_y - self.y) * 0.18
+        self.y = PLAYER_Y
 
         if self.shoot_cooldown > 0:
             self.shoot_cooldown -= 1
@@ -385,6 +444,7 @@ def main():
     pygame.init()
     pygame.font.init()
     sound_fx = SoundEffects()
+    announcer = ScoreAnnouncer()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("SpaceShip Dodge: YOLO Pose & Keyboard Edition")
     clock = pygame.time.Clock()
@@ -408,6 +468,7 @@ def main():
 
     score = 0
     game_over = False
+    game_over_frames = 0
     spawn_timer = 0
     bomb_cooldown = 0
 
@@ -431,24 +492,45 @@ def main():
                     asteroids.clear()
                     lasers.clear()
                     particles.clear()
+                    shockwaves.clear()
                     score = 0
+                    bomb_cooldown = 0
                     game_over = False
+                    game_over_frames = 0
+                    announcer.last_milestone = 0
 
         # --- Input Processing ---
         keys = pygame.key.get_pressed()
         is_udp = udp_state["active"]
 
+        # Gesture Restart Check (Jump / Shoot / Raise Hands on Game Over)
+        if game_over:
+            game_over_frames += 1
+            if game_over_frames > 8 and is_udp:
+                if udp_state.get("jump") or udp_state.get("restart") or udp_state.get("shoot") or udp_state.get("bomb"):
+                    # Restart Game Immediately
+                    player = Player()
+                    asteroids.clear()
+                    lasers.clear()
+                    particles.clear()
+                    shockwaves.clear()
+                    score = 0
+                    bomb_cooldown = 0
+                    game_over = False
+                    game_over_frames = 0
+                    announcer.last_milestone = 0
+                    udp_state["shoot"] = False
+                    udp_state["jump"] = False
+                    udp_state["restart"] = False
+                    udp_state["bomb"] = False
+
         if not is_udp and not game_over:
-            # Keyboard controls fallback
+            # Keyboard controls fallback (Horizontal Only)
             move_speed = 9.0
             if keys[pygame.K_LEFT] or keys[pygame.K_a]:
                 player.target_x -= move_speed
             if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
                 player.target_x += move_speed
-            if keys[pygame.K_UP] or keys[pygame.K_w]:
-                player.target_y -= move_speed
-            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-                player.target_y += move_speed
 
         # Shoot Trigger (Keyboard or UDP)
         should_shoot = keys[pygame.K_SPACE] or (is_udp and udp_state["shoot"])
@@ -458,7 +540,7 @@ def main():
             player.shoot_cooldown = 12
             sound_fx.play_laser()
 
-        # Super Bomb Trigger (Keyboard 'B' / Shift OR UDP Jump+Punch / Both Hands)
+        # Super Bomb Trigger (Keyboard 'B' / Shift OR UDP Double Jump / Both Hands Up)
         should_bomb = keys[pygame.K_b] or keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] or (is_udp and udp_state["bomb"])
         if should_bomb and bomb_cooldown == 0 and not game_over:
             bomb_cooldown = 90  # 1.5 sec cooldown
@@ -488,8 +570,8 @@ def main():
             player.update(udp_state["norm_x"], udp_state["norm_y"], is_udp)
 
             # Spawn Asteroids
-            difficulty = 1.0 + (score / 500)
-            spawn_interval = max(18, int(45 / difficulty))
+            difficulty = 1.0 + (score / 700)
+            spawn_interval = max(32, int(65 / difficulty))
             if spawn_timer >= spawn_interval:
                 asteroids.append(Asteroid(difficulty))
                 spawn_timer = 0
@@ -558,6 +640,9 @@ def main():
             if sw.radius >= sw.max_radius:
                 shockwaves.remove(sw)
 
+        # Announce score milestones via TTS (10,000, 20,000, ...)
+        announcer.check(score)
+
         # --- Rendering ---
         screen.fill(COLOR_BG)
 
@@ -617,7 +702,7 @@ def main():
 
             title_sf = font_large.render("GAME OVER", True, COLOR_RED)
             score_final_sf = font_medium.render(f"FINAL SCORE: {score}", True, COLOR_WHITE)
-            restart_sf = font_small.render("Press 'R' key or raise hands to Restart", True, COLOR_CYAN)
+            restart_sf = font_small.render("Press 'R' key or JUMP to Restart", True, COLOR_CYAN)
 
             screen.blit(title_sf, (SCREEN_WIDTH // 2 - title_sf.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
             screen.blit(score_final_sf, (SCREEN_WIDTH // 2 - score_final_sf.get_width() // 2, SCREEN_HEIGHT // 2 + 10))

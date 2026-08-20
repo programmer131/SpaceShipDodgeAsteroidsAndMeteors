@@ -144,6 +144,34 @@ class WebAudioSynth {
 
 const audio = new WebAudioSynth();
 
+// --- Sound unlock -----------------------------------------------------------
+// Browsers block AudioContext & SpeechSynthesis until the page receives a user
+// gesture. Pose-driven players never click the page, so we show a one-time
+// "tap to enable sound" prompt and unlock on the first tap/click/keypress.
+const soundStart = document.getElementById('sound-start');
+const soundStartBtn = document.getElementById('sound-start-btn');
+let audioUnlocked = false;
+
+function enableAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    audio.init();
+    try {
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    } catch (e) {}
+    if (soundStart) soundStart.classList.remove('active');
+}
+
+if (soundStartBtn) {
+    soundStartBtn.addEventListener('pointerdown', enableAudio);
+    soundStartBtn.addEventListener('touchend', enableAudio, { passive: true });
+}
+// Fallback: any interaction anywhere on the page unlocks sound.
+['pointerdown', 'touchstart', 'keydown'].forEach(evt =>
+    window.addEventListener(evt, enableAudio, { once: true, capture: true })
+);
+// ---------------------------------------------------------------------------
+
 // --- WebSocket Pose Receiver ---
 let poseState = { x: 0.5, y: 0.8, shoot: false, bomb: false, active: false };
 
@@ -164,9 +192,11 @@ function initWebSocket() {
             poseState.x = data.x ?? poseState.x;
             poseState.y = data.y ?? poseState.y;
             poseState.shoot = data.shoot ?? false;
+            poseState.jump = data.jump ?? false;
+            poseState.restart = data.restart ?? false;
             poseState.bomb = data.bomb ?? false;
             poseState.active = true;
-            modeBadge.innerText = "CONTROL: YOLO POSE 🥊";
+            modeBadge.innerText = "CONTROL: YOLO POSE 🦘";
             modeBadge.style.color = "#00ff80";
         } catch (e) {}
     };
@@ -304,9 +334,12 @@ class Obstacle {
         this.radius = Math.floor(Math.random() * 26 + 22);
         this.x = Math.random() * (WIDTH - this.radius * 2) + this.radius;
         this.y = -this.radius * 2;
-        this.speed = (Math.random() * 3 + 2.0) * (1.0 + (difficulty - 1.0) * 0.15);
+        // Slow and smooth falling speed for comfortable reaction time
+        const baseSpeed = Math.random() * 1.2 + 1.2;
+        const speedMult = 1.0 + Math.min(0.8, (difficulty - 1.0) * 0.08);
+        this.speed = baseSpeed * speedMult;
         this.rotation = Math.random() * Math.PI * 2;
-        this.rotSpeed = (Math.random() - 0.5) * 0.08;
+        this.rotSpeed = (Math.random() - 0.5) * 0.06;
         this.hp = Math.max(1, Math.floor(this.radius / 16));
 
         const types = ["crystal", "ufo", "fireball", "space_rock"];
@@ -387,12 +420,13 @@ class Obstacle {
     }
 }
 
+const PLAYER_Y = HEIGHT * 0.88;
+
 class Player {
     constructor() {
         this.x = WIDTH / 2;
-        this.y = HEIGHT * 0.82;
+        this.y = PLAYER_Y;
         this.targetX = this.x;
-        this.targetY = this.y;
         this.radius = 24;
         this.health = 100;
         this.shootCooldown = 0;
@@ -401,14 +435,11 @@ class Player {
     update(normX, normY, isPose) {
         if (isPose) {
             this.targetX = normX * WIDTH;
-            this.targetY = normY * HEIGHT;
         }
 
         this.x += (this.targetX - this.x) * 0.18;
-        this.y += (this.targetY - this.y) * 0.18;
-
         this.x = Math.max(30, Math.min(WIDTH - 30, this.x));
-        this.y = Math.max(30, Math.min(HEIGHT - 30, this.y));
+        this.y = PLAYER_Y;
 
         if (this.shootCooldown > 0) this.shootCooldown--;
     }
@@ -449,26 +480,26 @@ let score = 0;
 let gameOver = false;
 let spawnTimer = 0;
 let bombCooldown = 0;
+let lastMilestone = 0;
 
 // Inputs
 const keys = {};
 window.addEventListener('keydown', (e) => {
-    audio.init();
+    enableAudio();
     keys[e.code] = true;
     if (e.code === 'KeyR' && gameOver) resetGame();
 });
 window.addEventListener('keyup', (e) => keys[e.code] = false);
 
-// Mouse control fallback
+// Mouse control fallback (Horizontal Only)
 canvas.addEventListener('mousemove', (e) => {
     if (!poseState.active && !gameOver) {
         const rect = canvas.getBoundingClientRect();
         player.targetX = (e.clientX - rect.left) * (WIDTH / rect.width);
-        player.targetY = (e.clientY - rect.top) * (HEIGHT / rect.height);
     }
 });
 canvas.addEventListener('mousedown', () => {
-    audio.init();
+    enableAudio();
     if (!gameOver && player.shootCooldown === 0) {
         shootLasers();
     }
@@ -479,6 +510,16 @@ function shootLasers() {
     lasers.push(new Laser(player.x + 14, player.y - 10));
     player.shootCooldown = 12;
     audio.playLaser();
+}
+
+// Speak score milestones (10,000, 20,000, ...) via the built-in Speech Synthesis API.
+function announceScore(score) {
+    if (!('speechSynthesis' in window)) return;
+    const msg = new SpeechSynthesisUtterance(String(score));
+    msg.rate = 1.1;
+    msg.pitch = 1.3;
+    if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(msg);
 }
 
 function triggerBomb() {
@@ -498,6 +539,8 @@ function triggerBomb() {
     }
 }
 
+let gameOverFrames = 0;
+
 function resetGame() {
     player = new Player();
     obstacles.length = 0;
@@ -506,7 +549,9 @@ function resetGame() {
     shockwaves.length = 0;
     score = 0;
     bombCooldown = 0;
+    lastMilestone = 0;
     gameOver = false;
+    gameOverFrames = 0;
     gameOverScreen.classList.remove('active');
 }
 
@@ -524,17 +569,27 @@ function gameLoop() {
     // Stars
     stars.forEach(s => { s.update(); s.draw(); });
 
-    if (!gameOver) {
+    if (gameOver) {
+        gameOverFrames++;
+        if (gameOverFrames > 8 && poseState.active && (poseState.jump || poseState.restart || poseState.shoot || poseState.bomb)) {
+            resetGame();
+        }
+    } else {
         // Survival score
         if (spawnTimer % 6 === 0) score++;
 
-        // Keyboard controls
+        // Announce 10,000-point milestones via TTS
+        const milestone = Math.floor(score / 10000);
+        if (milestone > lastMilestone && milestone >= 1) {
+            lastMilestone = milestone;
+            announceScore(milestone * 10000);
+        }
+
+        // Keyboard controls (Horizontal Only)
         if (!poseState.active) {
             const speed = 9;
             if (keys['ArrowLeft'] || keys['KeyA']) player.targetX -= speed;
             if (keys['ArrowRight'] || keys['KeyD']) player.targetX += speed;
-            if (keys['ArrowUp'] || keys['KeyW']) player.targetY -= speed;
-            if (keys['ArrowDown'] || keys['KeyS']) player.targetY += speed;
         }
 
         // Shoot trigger
@@ -542,7 +597,7 @@ function gameLoop() {
             shootLasers();
         }
 
-        // Super Bomb Trigger (Key 'B' / Shift OR Pose Jump+Punch / Both Hands Up)
+        // Super Bomb Trigger (Key 'B' / Shift OR Pose Double Jump / Both Hands Up)
         if ((keys['KeyB'] || keys['ShiftLeft'] || keys['ShiftRight'] || (poseState.active && poseState.bomb))) {
             triggerBomb();
         }
@@ -553,8 +608,8 @@ function gameLoop() {
         player.update(poseState.x, poseState.y, poseState.active);
 
         // Spawn obstacles
-        const difficulty = 1.0 + (score / 500);
-        const spawnInterval = Math.max(18, Math.floor(45 / difficulty));
+        const difficulty = 1.0 + (score / 700);
+        const spawnInterval = Math.max(32, Math.floor(65 / difficulty));
         if (spawnTimer >= spawnInterval) {
             obstacles.push(new Obstacle(difficulty));
             spawnTimer = 0;

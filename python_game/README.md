@@ -4,19 +4,19 @@ A high-performance, 100% free, lightweight 2D Space Shooter in Python using **Py
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start (Single Command - All 3 Apps)
 
-### 1. Install Dependencies
-Run the following in your Linux terminal:
+To launch the **Web Server**, **Camera Pose Tracker (RTSP/Webcam)**, and **Pygame Game** simultaneously in one command:
 
 ```bash
-pip install -r requirements.txt
+cd python_game
+./run_all.sh
 ```
-*(Dependencies: `pygame-ce opencv-python ultralytics numpy`)*
+*(Or specify a custom camera: `./run_all.sh "rtsp://192.168.1.114:554/live/ch00_1"` or `./run_all.sh 0`)*
 
 ---
 
-### 2. Launch the Game (Desktop Pygame OR Web Browser)
+## 🎮 Or Run Applications Individually
 
 #### Option A: Pygame Desktop Game
 ```bash
@@ -36,15 +36,33 @@ Open **[http://localhost:8000](http://localhost:8000)** (or `http://192.168.20.1
 Open a **second terminal** and run:
 
 ```bash
-python pose_tracker.py
+# Using your RTSP network camera (TCP transport configured):
+python pose_tracker.py "rtsp://192.168.1.114:554/live/ch00_1"
+
+# Or with local webcam (index 0):
+python pose_tracker.py 0
 ```
-*(To use a network/phone IP camera URL, run: `python pose_tracker.py http://192.168.20.103:8080/video`)*
 
 * **Body Controls**:
-  * 🏃 **Lean Body Left / Right**: Moves spaceship smoothly across the screen.
-  * 🥊 **Superhero Punch (Thrust Arm Forward)**: Shoots lasers!
-  * 👏 **Power Clap (Hands Together)**: Shoots lasers!
+  * 🏃 **Lean Body Left / Right**: Steers spaceship smoothly across the bottom.
+  * 🙌 **Both Hands Up**: Fires lasers (hold to keep shooting) & restarts on Game Over!
+  * 💥 **Every 2nd JUMP (Body Up)**: Unleashes the Super Bomb! Jumps are counted in pairs — if more than **1 second** passes between jumps, the count resets and the next jump starts a fresh pair. Super Bombs have a **5-second cooldown**; any double jump during that window is ignored. A jump only counts if the body really lifts (elevation + shoulders level) — sideways leans used for steering and small keypoint jitter are rejected and never fire a bomb.
   * 🛑 **Press 'q' or ESC**: Closes camera window.
+
+  *Jump detection uses the **body center (hips + shoulders)** scaled to the player's own size, so it works the same for short kids and tall adults.*
+
+---
+
+## 🔊 Score Announcements (TTS)
+
+Both games speak your score at each **10,000-point** milestone ("10000", "20000", ...).
+
+* **Pygame**: uses the **espeak-ng** command (Linux) automatically, falling back to `pyttsx3` or macOS `say` if present. On Linux just install the backend once:
+  ```bash
+  sudo apt install espeak-ng        # Debian/Ubuntu
+  ```
+  (Or `pip install pyttsx3` to use the Python engine instead.)
+* **Web**: uses the browser's built-in Speech Synthesis — nothing to install.
 
 ---
 

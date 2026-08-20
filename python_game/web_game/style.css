@@ -157,3 +157,36 @@ canvas {
     transform: scale(1.06);
     box-shadow: 0 0 30px rgba(255, 0, 128, 0.8);
 }
+
+/* Sound Unlock Prompt */
+#sound-start {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(10, 10, 20, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+#sound-start.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#sound-start-btn {
+    font-size: 22px;
+    padding: 18px 44px;
+    animation: sound-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sound-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+}

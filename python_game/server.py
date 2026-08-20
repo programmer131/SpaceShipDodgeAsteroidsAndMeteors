@@ -18,7 +18,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 HTTP_PORT = 8000
 WS_PORT = 8080
-UDP_PORT = 5005
+UDP_PORT = 5006
 
 # Directory containing web_game static files
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_game")
