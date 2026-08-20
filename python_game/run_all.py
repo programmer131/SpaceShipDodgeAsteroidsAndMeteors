@@ -19,7 +19,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_PYTHON = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
 PYTHON_EXEC = VENV_PYTHON if os.path.exists(VENV_PYTHON) else sys.executable
 
-DEFAULT_CAMERA = "rtsp://192.168.1.114:554/live/ch00_1"
+DEFAULT_CAMERA = "rtsp://192.168.1.114:554/live/11"
 
 def print_banner(cam_source):
     print("=" * 65)

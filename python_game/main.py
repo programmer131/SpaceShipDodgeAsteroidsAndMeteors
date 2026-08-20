@@ -139,6 +139,18 @@ class ScoreAnnouncer:
             subprocess.Popen(["say", text],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+
+def apply_health_milestones(player, score, last_milestone):
+    """Return half health on each 5000-point milestone reached."""
+    milestone = score // 5000
+    if milestone <= last_milestone:
+        return last_milestone
+
+    for _ in range(last_milestone + 1, milestone + 1):
+        player.health = min(player.max_health, player.health + player.max_health // 2)
+
+    return milestone
+
     def _speak_pyttsx3(self, text):
         try:
             self._pyttsx3.say(text)
@@ -468,9 +480,10 @@ def main():
 
     score = 0
     game_over = False
-    game_over_frames = 0
+    game_over_started_at = None
     spawn_timer = 0
     bomb_cooldown = 0
+    health_milestone = 0
 
     print("[Game Started] Use Arrow Keys or launch 'python pose_tracker.py' for body control!")
 
@@ -488,16 +501,18 @@ def main():
                     running = False
                 elif event.key == pygame.K_r and game_over:
                     # Restart Game
-                    player = Player()
-                    asteroids.clear()
-                    lasers.clear()
-                    particles.clear()
-                    shockwaves.clear()
-                    score = 0
-                    bomb_cooldown = 0
-                    game_over = False
-                    game_over_frames = 0
-                    announcer.last_milestone = 0
+                    if game_over_started_at is not None and time.time() - game_over_started_at >= 5.0:
+                        player = Player()
+                        asteroids.clear()
+                        lasers.clear()
+                        particles.clear()
+                        shockwaves.clear()
+                        score = 0
+                        bomb_cooldown = 0
+                        game_over = False
+                        game_over_started_at = None
+                        announcer.last_milestone = 0
+                        health_milestone = 0
 
         # --- Input Processing ---
         keys = pygame.key.get_pressed()
@@ -505,8 +520,9 @@ def main():
 
         # Gesture Restart Check (Jump / Shoot / Raise Hands on Game Over)
         if game_over:
-            game_over_frames += 1
-            if game_over_frames > 8 and is_udp:
+            if game_over_started_at is None:
+                game_over_started_at = time.time()
+            if time.time() - game_over_started_at >= 5.0 and is_udp:
                 if udp_state.get("jump") or udp_state.get("restart") or udp_state.get("shoot") or udp_state.get("bomb"):
                     # Restart Game Immediately
                     player = Player()
@@ -517,8 +533,9 @@ def main():
                     score = 0
                     bomb_cooldown = 0
                     game_over = False
-                    game_over_frames = 0
+                    game_over_started_at = None
                     announcer.last_milestone = 0
+                    health_milestone = 0
                     udp_state["shoot"] = False
                     udp_state["jump"] = False
                     udp_state["restart"] = False
@@ -622,6 +639,8 @@ def main():
                     if player.health <= 0:
                         player.health = 0
                         game_over = True
+                        if game_over_started_at is None:
+                            game_over_started_at = time.time()
 
                 # Remove off-screen asteroids (Dodge Bonus)
                 elif asteroid.y > SCREEN_HEIGHT + asteroid.radius * 2:
@@ -642,6 +661,7 @@ def main():
 
         # Announce score milestones via TTS (10,000, 20,000, ...)
         announcer.check(score)
+        health_milestone = apply_health_milestones(player, score, health_milestone)
 
         # --- Rendering ---
         screen.fill(COLOR_BG)
@@ -702,7 +722,12 @@ def main():
 
             title_sf = font_large.render("GAME OVER", True, COLOR_RED)
             score_final_sf = font_medium.render(f"FINAL SCORE: {score}", True, COLOR_WHITE)
-            restart_sf = font_small.render("Press 'R' key or JUMP to Restart", True, COLOR_CYAN)
+            if game_over_started_at is None:
+                restart_text = "Press 'R' key or JUMP to Restart"
+            else:
+                wait_left = max(0, 5.0 - (time.time() - game_over_started_at))
+                restart_text = f"Restart available in {wait_left:.1f}s"
+            restart_sf = font_small.render(restart_text, True, COLOR_CYAN)
 
             screen.blit(title_sf, (SCREEN_WIDTH // 2 - title_sf.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
             screen.blit(score_final_sf, (SCREEN_WIDTH // 2 - score_final_sf.get_width() // 2, SCREEN_HEIGHT // 2 + 10))

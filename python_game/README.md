@@ -46,7 +46,8 @@ python pose_tracker.py 0
 * **Body Controls**:
   * 🏃 **Lean Body Left / Right**: Steers spaceship smoothly across the bottom.
   * 🙌 **Both Hands Up**: Fires lasers (hold to keep shooting) & restarts on Game Over!
-  * 💥 **Every 2nd JUMP (Body Up)**: Unleashes the Super Bomb! Jumps are counted in pairs — if more than **1 second** passes between jumps, the count resets and the next jump starts a fresh pair. Super Bombs have a **5-second cooldown**; any double jump during that window is ignored. A jump only counts if the body really lifts (elevation + shoulders level) — sideways leans used for steering and small keypoint jitter are rejected and never fire a bomb.
+  * 💥 **Every 2nd JUMP (Body Up)**: Unleashes the Super Bomb! Jumps are counted in pairs — if more than **1.6 seconds** passes between jumps, the count resets and the next jump starts a fresh pair. Super Bombs have a **5-second cooldown**; any double jump during that window is ignored. A jump only counts if the body really lifts (elevation + shoulders level) — sideways leans used for steering and small keypoint jitter are rejected and never fire a bomb.
+  * ❤️ **Every 5000 points**: Restores **half health**.
   * 🛑 **Press 'q' or ESC**: Closes camera window.
 
   *Jump detection uses the **body center (hips + shoulders)** scaled to the player's own size, so it works the same for short kids and tall adults.*

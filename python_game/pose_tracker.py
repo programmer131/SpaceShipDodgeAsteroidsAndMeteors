@@ -26,7 +26,7 @@ TARGET_FPS = 10.0
 PROCESS_INTERVAL = 1.0 / TARGET_FPS  # 0.100s = 100ms
 
 # Default Camera (can be webcam 0, IP URL, or RTSP stream)
-DEFAULT_CAM = "rtsp://192.168.1.114:554/live/ch00_1"
+DEFAULT_CAM = "rtsp://192.168.1.114:554/live/11"
 
 
 class LatestFrameReader:
@@ -72,9 +72,15 @@ def main():
 
     print(f"[YOLO Pose Tracker] Connecting to camera source: {cam_source}...")
     
-    # Enable TCP transport for RTSP streams to avoid packet loss/corruption
+    # Enable TCP transport plus low-latency FFmpeg flags for RTSP streams.
     if str(cam_source).startswith("rtsp://"):
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|"
+            "fflags;nobuffer|"
+            "flags;low_delay|"
+            "analyzeduration;0|"
+            "probesize;32"
+        )
         cap = cv2.VideoCapture(cam_source, cv2.CAP_FFMPEG)
     else:
         try:
@@ -126,12 +132,14 @@ def main():
     # Every-2nd-jump -> Super Bomb state (velocity phase machine)
     jump_phase = 0             # 0=idle, 1=rising, 2=falling
     jump_streak = 0            # count of jumps; every 2nd jump fires the bomb
-    JUMP_PAIR_TIMEOUT = 1.0    # max seconds between the two jumps of a bomb pair
+    JUMP_PAIR_TIMEOUT = 1.6    # max seconds between the two jumps of a bomb pair
     last_jump_time = 0.0       # landing time of the last counted jump
     BOMB_COOLDOWN = 5.0        # minimum seconds between super bombs
     last_bomb_time = 0.0       # time the last super bomb fired
     MIN_BOMB_ELEV = 0.08       # body center must lift >= 8% of shoulder width at the apex
     LEAN_TILT_LIMIT = 0.35     # shoulders tilted >= 35% of width => sideways lean, not a jump
+    jump_peak_elevation = 0.0
+    jump_phase_started_at = 0.0
 
     while True:
         loop_start = time.time()
@@ -248,20 +256,30 @@ def main():
                         # the apex means sideways lean or keypoint jitter -- which make
                         # velocity spikes but never lift the body above the standing
                         # reference -- abort harmlessly and never touch the pair counter.
+                        now = time.time()
                         if jump_phase == 0:   # idle
-                            if rel_vel >= 0.08:   # clearly rising -> fresh takeoff
+                            if shoulder_tilt < LEAN_TILT_LIMIT and (
+                                    (rel_vel >= 0.07 and rel_elevation >= 0.04) or
+                                    rel_elevation >= MIN_BOMB_ELEV):
                                 jump_phase = 1
+                                jump_peak_elevation = max(0.0, rel_elevation)
+                                jump_phase_started_at = now
                         elif jump_phase == 1:   # rising
-                            if rel_vel < 0.02:  # velocity faded (apex)
-                                if (rel_elevation >= MIN_BOMB_ELEV and
-                                        shoulder_tilt < LEAN_TILT_LIMIT):
-                                    jump_phase = 2   # genuine lift-off -> now falling
+                            jump_peak_elevation = max(jump_peak_elevation, rel_elevation)
+                            if shoulder_tilt >= LEAN_TILT_LIMIT or now - jump_phase_started_at > 1.0:
+                                jump_phase = 0   # lean/jitter/stale phase -> abort
+                            elif rel_vel <= 0.02:
+                                if jump_peak_elevation >= MIN_BOMB_ELEV:
+                                    jump_phase = 2   # genuine lift-off -> now falling/landing
                                 else:
-                                    jump_phase = 0   # lean/jitter -> abort, nothing counted
+                                    jump_phase = 0   # no real lift -> abort
                         elif jump_phase == 2:   # falling
-                            if rel_vel <= -0.08:  # fully landed -> count this jump
+                            jump_peak_elevation = max(jump_peak_elevation, rel_elevation)
+                            returned_to_baseline = rel_elevation <= 0.04 and rel_vel <= 0.03
+                            falling_from_peak = rel_vel <= -0.06 and rel_elevation <= jump_peak_elevation - 0.03
+                            stale_landing = now - jump_phase_started_at > 1.2 and rel_elevation <= 0.06
+                            if returned_to_baseline or falling_from_peak or stale_landing:
                                 jump_phase = 0
-                                now = time.time()
                                 # IGNORE every jump during the 5s super-bomb cooldown: a
                                 # double jump in that window must not fire, and must not be
                                 # banked toward the next pair either.
@@ -278,6 +296,8 @@ def main():
                                         jump_streak = 0
                                         last_bomb_time = now
                                         print("[YOLO Pose Tracker] 💥 SUPER BOMB (2 JUMPS)!")
+                            elif now - jump_phase_started_at > 1.5:
+                                jump_phase = 0
 
                     prev2_body_y = prev_body_y
                     prev_body_y = body_y
@@ -358,7 +378,7 @@ def main():
                 status_text = f"BOMB COOLDOWN {cooldown_left:.1f}s (JUMPS IGNORED)"
                 color = (255, 210, 0)
             else:
-                status_text = f"10 FPS | HANDS UP TO SHOOT | 2 JUMPS = BOMB | {flip_str} ('f')"
+                status_text = f"10 FPS | JUMP COUNT {jump_streak}/2 | 2 JUMPS = BOMB | {flip_str} ('f')"
                 color = (200, 230, 255)
 
         cv2.putText(frame, status_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.58, color, 2)
@@ -385,4 +405,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -20,20 +20,51 @@ const HEIGHT = 750;
 class WebAudioSynth {
     constructor() {
         this.ctx = null;
+        this.unlocking = false;
     }
 
-    init() {
+    async init() {
         if (!this.ctx) {
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
             if (AudioCtx) this.ctx = new AudioCtx();
         }
-        if (this.ctx && this.ctx.state === 'suspended') {
-            this.ctx.resume();
+        if (!this.ctx) return false;
+
+        if (this.ctx.state === 'suspended' && !this.unlocking) {
+            this.unlocking = true;
+            try {
+                await this.ctx.resume();
+            } catch (e) {
+                // Autoplay policy can reject this until a trusted user gesture.
+            } finally {
+                this.unlocking = false;
+            }
         }
+
+        if (this.ctx.state === 'running') {
+            const silent = this.ctx.createBufferSource();
+            const gain = this.ctx.createGain();
+            gain.gain.value = 0;
+            silent.connect(gain);
+            gain.connect(this.ctx.destination);
+            try {
+                silent.start(0);
+            } catch (e) {}
+        }
+
+        return this.ctx.state === 'running';
+    }
+
+    ready() {
+        if (!this.ctx || this.ctx.state !== 'running') {
+            enableAudio();
+            return false;
+        }
+        return true;
     }
 
     playLaser() {
-        if (!this.ctx) return;
+        if (!this.ready()) return;
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -53,7 +84,7 @@ class WebAudioSynth {
     }
 
     playExplosion() {
-        if (!this.ctx) return;
+        if (!this.ready()) return;
         const now = this.ctx.currentTime;
         const bufferSize = this.ctx.sampleRate * 0.3;
         const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
@@ -82,7 +113,7 @@ class WebAudioSynth {
     }
 
     playHit() {
-        if (!this.ctx) return;
+        if (!this.ready()) return;
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -102,7 +133,7 @@ class WebAudioSynth {
     }
 
     playDamage() {
-        if (!this.ctx) return;
+        if (!this.ready()) return;
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -122,7 +153,7 @@ class WebAudioSynth {
     }
 
     playBomb() {
-        if (!this.ctx) return;
+        if (!this.ready()) return;
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -145,31 +176,34 @@ class WebAudioSynth {
 const audio = new WebAudioSynth();
 
 // --- Sound unlock -----------------------------------------------------------
-// Browsers block AudioContext & SpeechSynthesis until the page receives a user
-// gesture. Pose-driven players never click the page, so we show a one-time
-// "tap to enable sound" prompt and unlock on the first tap/click/keypress.
+// Browsers decide when autoplay is allowed. Try immediately and keep retrying
+// from every real input path; only mark sound unlocked after AudioContext runs.
 const soundStart = document.getElementById('sound-start');
 const soundStartBtn = document.getElementById('sound-start-btn');
 let audioUnlocked = false;
 
-function enableAudio() {
-    if (audioUnlocked) return;
-    audioUnlocked = true;
-    audio.init();
+async function enableAudio() {
+    if (audioUnlocked) return true;
+    const running = await audio.init();
+    audioUnlocked = running;
     try {
         if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     } catch (e) {}
-    if (soundStart) soundStart.classList.remove('active');
+    if (soundStart) soundStart.classList.toggle('active', !audioUnlocked);
+    return audioUnlocked;
 }
 
 if (soundStartBtn) {
     soundStartBtn.addEventListener('pointerdown', enableAudio);
     soundStartBtn.addEventListener('touchend', enableAudio, { passive: true });
 }
-// Fallback: any interaction anywhere on the page unlocks sound.
-['pointerdown', 'touchstart', 'keydown'].forEach(evt =>
-    window.addEventListener(evt, enableAudio, { once: true, capture: true })
+['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'].forEach(evt =>
+    window.addEventListener(evt, enableAudio, { capture: true })
 );
+['load', 'focus', 'pageshow', 'visibilitychange'].forEach(evt =>
+    window.addEventListener(evt, enableAudio)
+);
+enableAudio();
 // ---------------------------------------------------------------------------
 
 // --- WebSocket Pose Receiver ---
@@ -184,6 +218,7 @@ function initWebSocket() {
 
     ws.onopen = () => {
         console.log("WebSocket connected!");
+        enableAudio();
     };
 
     ws.onmessage = (event) => {
@@ -196,6 +231,7 @@ function initWebSocket() {
             poseState.restart = data.restart ?? false;
             poseState.bomb = data.bomb ?? false;
             poseState.active = true;
+            enableAudio();
             modeBadge.innerText = "CONTROL: YOLO POSE 🦘";
             modeBadge.style.color = "#00ff80";
         } catch (e) {}
@@ -478,16 +514,19 @@ const shockwaves = [];
 let player = new Player();
 let score = 0;
 let gameOver = false;
+let gameOverStartedAt = null;
 let spawnTimer = 0;
 let bombCooldown = 0;
 let lastMilestone = 0;
+let healthMilestone = 0;
+const restartBtnDefaultText = restartBtn.textContent;
 
 // Inputs
 const keys = {};
 window.addEventListener('keydown', (e) => {
     enableAudio();
     keys[e.code] = true;
-    if (e.code === 'KeyR' && gameOver) resetGame();
+    if (e.code === 'KeyR' && gameOver && canRestartNow()) resetGame();
 });
 window.addEventListener('keyup', (e) => keys[e.code] = false);
 
@@ -522,6 +561,21 @@ function announceScore(score) {
     window.speechSynthesis.speak(msg);
 }
 
+function applyHealthMilestones() {
+    const milestone = Math.floor(score / 5000);
+    if (milestone <= healthMilestone) return;
+
+    for (let i = healthMilestone + 1; i <= milestone; i++) {
+        player.health = Math.min(100, player.health + 50);
+    }
+
+    healthMilestone = milestone;
+}
+
+function canRestartNow() {
+    return gameOverStartedAt !== null && (Date.now() - gameOverStartedAt) >= 5000;
+}
+
 function triggerBomb() {
     if (bombCooldown === 0 && !gameOver) {
         bombCooldown = 90;
@@ -539,8 +593,6 @@ function triggerBomb() {
     }
 }
 
-let gameOverFrames = 0;
-
 function resetGame() {
     player = new Player();
     obstacles.length = 0;
@@ -550,12 +602,17 @@ function resetGame() {
     score = 0;
     bombCooldown = 0;
     lastMilestone = 0;
+    healthMilestone = 0;
     gameOver = false;
-    gameOverFrames = 0;
+    gameOverStartedAt = null;
+    restartBtn.textContent = restartBtnDefaultText;
     gameOverScreen.classList.remove('active');
 }
 
-restartBtn.addEventListener('click', resetGame);
+restartBtn.addEventListener('click', () => {
+    if (!canRestartNow()) return;
+    resetGame();
+});
 
 // --- Game Loop ---
 
@@ -570,13 +627,19 @@ function gameLoop() {
     stars.forEach(s => { s.update(); s.draw(); });
 
     if (gameOver) {
-        gameOverFrames++;
-        if (gameOverFrames > 8 && poseState.active && (poseState.jump || poseState.restart || poseState.shoot || poseState.bomb)) {
-            resetGame();
+        if (gameOverStartedAt === null) gameOverStartedAt = Date.now();
+        const waitLeft = Math.max(0, 5 - ((Date.now() - gameOverStartedAt) / 1000));
+        restartBtn.textContent = waitLeft > 0 ? `RESTART IN ${waitLeft.toFixed(1)}S` : restartBtnDefaultText;
+        if (poseState.active && (poseState.jump || poseState.restart || poseState.shoot || poseState.bomb)) {
+            if (canRestartNow()) {
+                resetGame();
+            }
         }
     } else {
         // Survival score
         if (spawnTimer % 6 === 0) score++;
+
+        applyHealthMilestones();
 
         // Announce 10,000-point milestones via TTS
         const milestone = Math.floor(score / 10000);
@@ -660,8 +723,10 @@ function gameLoop() {
                 if (player.health <= 0) {
                     player.health = 0;
                     gameOver = true;
+                    if (gameOverStartedAt === null) gameOverStartedAt = Date.now();
                     gameOverScreen.classList.add('active');
                     finalScoreText.innerText = `FINAL SCORE: ${score}`;
+                    restartBtn.textContent = 'RESTART IN 5.0S';
                 }
             } else if (obs.y > HEIGHT + obs.radius * 2) {
                 score += 15; // Dodge bonus
@@ -685,9 +750,9 @@ function gameLoop() {
         if (shockwaves[i].radius >= shockwaves[i].maxRadius) shockwaves.splice(i, 1);
     }
 
-    // Update UI HUD
-    healthFill.style.width = `${Math.max(0, player.health)}%`;
-    scoreDisplay.innerText = `SCORE: ${String(score).padStart(5, '0')}`;
+        // Update UI HUD
+        healthFill.style.width = `${Math.max(0, player.health)}%`;
+        scoreDisplay.innerText = `SCORE: ${String(score).padStart(5, '0')}`;
 
     requestAnimationFrame(gameLoop);
 }
